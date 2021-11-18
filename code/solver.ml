@@ -87,8 +87,38 @@ module type FACT =
 *)
 module Make (Fact : FACT) (Graph : DFA_GRAPH with type fact := Fact.t) =
   struct
-
+    module S = Graph.NodeS
+    
     let solve (g:Graph.t) : Graph.t =
-      failwith "TODO HW6: Solver.solve unimplemented"
+      (* initialize worklist and new updatable graph *)
+      let new_g = ref g in
+      let w = ref @@ Graph.nodes g in (* w : NodeS.t *)
+      
+      while S.is_empty !w = false do
+        (* pop a node from the worklist and getting its fact *)
+        let n = S.choose !w in (* n : NodeS.elt *)
+        w := S.remove n !w;
+        let old_out = Graph.out !new_g n in
+
+        (* combining flow fact of node's predecessors *)
+        let f_in = Fact.combine @@ 
+          List.map (fun elt -> Graph.out !new_g elt)
+            (S.elements @@ Graph.preds !new_g n) in
+
+        (* get new output and compare *)
+        let f_out = Graph.flow !new_g  n f_in in
+        new_g := Graph.add_fact n f_out !new_g;
+
+        (* update graph and add succ to worklist *)
+        if (Fact.compare old_out f_out != 0)
+        then begin
+          S.iter (fun elt -> w := S.add elt !w) (Graph.succs g n)
+        end
+      done;
+
+      (* return updated graph *)
+      !new_g
   end
 
+(* I hate functors :((( 
+ * ok fine I struggle with them... they are v useful *) 
