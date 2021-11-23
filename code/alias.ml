@@ -34,9 +34,21 @@ type fact = SymPtr.t UidM.t
 
  *)
 let insn_flow ((u,i):uid * insn) (d:fact) : fact =
+  (* todo: uhh this whole function feels v badly written *)
   match i with
   | Alloca _ -> UidM.add u SymPtr.Unique d
-  | _ -> failwith "Alias.insn_flow unimplemented"
+
+  | Bitcast (Ptr _, op, _) ->
+    let d' = UidM.add u SymPtr.MayAlias d in
+    begin match op with
+      | Id u' -> UidM.add u' SymPtr.MayAlias d'
+      | _ -> d'
+    end
+      
+  | Load (Ptr (Ptr _), _) | Call (Ptr _, _, _)
+  | Gep (Ptr _, _, _) ->
+    UidM.add u SymPtr.MayAlias d
+  | _ -> (* todo: UidM.add u SymPtr.UndefAlias *) d
 
 
 (* The flow function across terminators is trivial: they never change alias info *)
@@ -71,7 +83,33 @@ module Fact =
        meet of two SymPtr.t facts.
     *)
     let combine (ds:fact list) : fact =
-      failwith "Alias.Fact.combine not implemented"
+      let meet key f1 f2 =
+        match f1 with
+        | Some f1' -> begin match f2 with
+            | Some f2' ->
+              if SymPtr.compare f1' f2' == 0
+              then f1
+              else Some (SymPtr.MayAlias)
+            | None -> f1
+          end
+        | None -> f2
+      in
+      List.fold_left (fun ih f ->
+          UidM.merge meet ih (normalize f)
+        ) UidM.empty ds        
+
+      (* definitely wrong lol... tho unsure why it runs??: *)
+      (*
+      let meet key f1 f2 =
+        match f1 with
+        | Some f1' -> begin match f2 with
+            | Some f2' -> f1
+            | None -> None
+          end
+        | None -> f2
+      in
+      normalize (List.fold_left (fun ih f -> UidM.merge meet ih (normalize f)) UidM.empty ds) 
+      ; failwith "Alias.Fact.combine not implemented" *)
   end
 
 (* instantiate the general framework ---------------------------------------- *)
