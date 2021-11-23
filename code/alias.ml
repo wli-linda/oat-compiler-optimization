@@ -48,6 +48,14 @@ let insn_flow ((u,i):uid * insn) (d:fact) : fact =
   | Load (Ptr (Ptr _), _) | Call (Ptr _, _, _)
   | Gep (Ptr _, _, _) ->
     UidM.add u SymPtr.MayAlias d
+(*
+  | Store (_, _, op) ->
+    let d' = UidM.add u SymPtr.MayAlias d in
+    begin match op with
+      | Id u' -> UidM.add u' SymPtr.MayAlias d'
+      | _ -> d'
+    end *)
+
   | _ -> (* todo: UidM.add u SymPtr.UndefAlias *) d
 
 
