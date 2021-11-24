@@ -105,19 +105,6 @@ module Fact =
       List.fold_left (fun ih f ->
           UidM.merge meet ih (normalize f)
         ) UidM.empty ds        
-
-      (* definitely wrong lol... tho unsure why it runs??: *)
-      (*
-      let meet key f1 f2 =
-        match f1 with
-        | Some f1' -> begin match f2 with
-            | Some f2' -> f1
-            | None -> None
-          end
-        | None -> f2
-      in
-      normalize (List.fold_left (fun ih f -> UidM.merge meet ih (normalize f)) UidM.empty ds) 
-      ; failwith "Alias.Fact.combine not implemented" *)
   end
 
 (* instantiate the general framework ---------------------------------------- *)

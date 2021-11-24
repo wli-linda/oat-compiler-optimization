@@ -37,7 +37,38 @@ type fact = SymConst.t UidM.t
    - Uid of all other instructions are NonConst-out
  *)
 let insn_flow (u,i:uid * insn) (d:fact) : fact =
-  failwith "Constprop.insn_flow unimplemented"
+  let d' = UidM.remove u d in
+  let eval_id id i =
+    match UidM.find_opt id d with
+    | Some SymConst.NonConst -> UidM.add u SymConst.NonConst d'
+    | Some SymConst.UndefConst -> UidM.add u SymConst.UndefConst d'
+    | Some SymConst.Const i' -> UidM.add u (SymConst.Const (Int64.add i i')) d'
+    | None -> d
+  in
+  match i with
+  | Binop (_, _, op1, op2) | Icmp (_, _, op1, op2) ->
+    begin match op1, op2 with
+      (* todo: need to evaluate result with two constants 
+       * (or operands that eventually evaluate to consts) *)
+      | Const _, Const i2 -> UidM.add u (SymConst.Const i2) d'
+      | Id id1, Id id2 ->
+        begin match UidM.find_opt id1 d with
+          | Some SymConst.NonConst -> UidM.add u SymConst.NonConst d'
+          | Some SymConst.UndefConst -> UidM.add u SymConst.UndefConst d'
+          | _ -> begin match UidM.find_opt id2 d with
+              | Some SymConst.NonConst -> UidM.add u SymConst.NonConst d'
+              | Some SymConst.UndefConst -> UidM.add u SymConst.UndefConst d'
+              | _ -> d
+            end
+        end
+      | Const i, Id id -> eval_id id i
+      | Id id, Const i -> eval_id id i
+      | _ -> d
+    end
+  | Store _ | Call (Void, _, _) ->
+    (* todo: normalize not doing anything later rip *)
+    (* UidM.add u SymConst.UndefConst *) d
+  | _ -> UidM.add u SymConst.NonConst d'
 
 (* The flow function across terminators is trivial: they never change const info *)
 let terminator_flow (t:terminator) (d:fact) : fact = d
@@ -62,8 +93,23 @@ module Fact =
 
     (* The constprop analysis should take the meet over predecessors to compute the
        flow into a node. You may find the UidM.merge function useful *)
-    let combine (ds:fact list) : fact = 
-      failwith "Constprop.Fact.combine unimplemented"
+    let combine (ds:fact list) : fact =
+      let meet key f1 f2 =
+        match f1 with
+        | Some f1' -> begin match f2 with
+            | Some f2' ->
+              if SymConst.compare f1' f2' == 0
+              then f1
+              (* todo: should change *)
+              else Some (SymConst.NonConst)
+            | None -> f1
+          end
+        | None -> f2
+      in
+      (* todo: why isn't normalize doing anything here rip *)
+      List.fold_left (fun ih f ->
+          UidM.merge meet ih (normalize f)
+        ) UidM.empty ds  
   end
 
 (* instantiate the general framework ---------------------------------------- *)
