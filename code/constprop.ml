@@ -38,16 +38,13 @@ type fact = SymConst.t UidM.t
  *)
 let insn_flow (u,i:uid * insn) (d:fact) : fact =
   let eval_binop binop i1 i2 =
+    let open Int64 in
     match binop with
-    | Add -> Int64.add i1 i2
-    | Sub -> Int64.sub i1 i2
-    | Mul -> Int64.mul i1 i2
-    | Shl -> Int64.shift_left i1 (Int64.to_int i2)
-    | Lshr -> Int64.shift_right_logical i1 (Int64.to_int i2)
-    | Ashr -> Int64.shift_right i1 (Int64.to_int i2)
-    | And -> Int64.logand i1 i2
-    | Or -> Int64.logor i1 i2
-    | Xor -> Int64.logxor i1 i2
+    | Add -> add i1 i2 | Sub -> sub i1 i2 | Mul -> mul i1 i2
+    | Shl -> shift_left i1 (to_int i2)
+    | Lshr -> shift_right_logical i1 (to_int i2)
+    | Ashr -> shift_right i1 (to_int i2)
+    | And -> logand i1 i2 | Or -> logor i1 i2 | Xor -> logxor i1 i2
   in
   let eval_cnd cnd i1 i2 =
     let b = match cnd with
@@ -63,7 +60,7 @@ let insn_flow (u,i:uid * insn) (d:fact) : fact =
         | Some SymConst.Const i' -> SymConst.Const i'
         | Some SymConst.NonConst ->  SymConst.NonConst
         | Some SymConst.UndefConst -> SymConst.UndefConst
-        (* todo: not sure if this is the case *)
+        (* todo: not sure if this is the case, or why it makes sense, hmm *)
         | None -> SymConst.UndefConst
       end
     | _ -> failwith "constprop eval_op not sure how to handle op"
@@ -155,12 +152,50 @@ let analyze (g:Cfg.t) : Graph.t =
    functions.                                                                 *)
 let run (cg:Graph.t) (cfg:Cfg.t) : Cfg.t =
   let open SymConst in
-  
-
-  let cp_block (l:Ll.lbl) (cfg:Cfg.t) : Cfg.t =
-    let b = Cfg.block cfg l in
-    let cb = Graph.uid_out cg l in
-    failwith "Constprop.cp_block unimplemented"
+  let eval_op uid op cb =
+    match op with
+    | Id id -> (match UidM.find_opt id (cb uid) with
+        | Some (Const i) -> Ll.Const i | _ -> op)
+    | _ -> op
   in
-
+  let eval_insn (uid, insn) cb =
+    match insn with
+    | Binop (bop, ty, op1, op2) ->
+      Binop (bop, ty, eval_op uid op1 cb, eval_op uid op2 cb)
+    | Load (ty, op) ->
+      Load (ty, eval_op uid op cb)
+    | Store (ty, op1, op2) ->
+      (* storing in op2, so op2 can't be Const *)
+      Store (ty, eval_op uid op1 cb, op2) 
+    | Icmp (cnd, ty, op1, op2) ->
+      Icmp (cnd, ty, eval_op uid op1 cb, eval_op uid op2 cb)
+    | Call (ty, op, ls) ->
+      let new_ls = List.map (fun (ty', op') -> ty', eval_op uid op' cb) ls in
+      Call (ty, op, new_ls)
+    (* other insns shouldn't involve constprop *)
+    | _ -> insn
+  in 
+  let eval_term (uid, term) cb =
+    match term with
+    | Ret (ty, op) -> begin match op with
+        | None -> uid, term
+        | Some op' -> uid, Ret (ty, Some (eval_op uid op' cb))
+      end
+    | Cbr (op, lbl1, lbl2) ->
+      uid, Cbr (eval_op uid op cb, lbl1, lbl2)
+    | _ -> uid, term
+  in
+  
+  let cp_block (l:Ll.lbl) (cfg:Cfg.t) : Cfg.t =
+    let b = Cfg.block cfg l in (* b : Ll.block *)
+    let cb = Graph.uid_out cg l in (* cb : Ll.uid -> Fact.t / SymConst.t UidM.t *)
+    let res_insns = List.map (fun (uid, insn) -> uid, eval_insn (uid, insn) cb) b.insns in
+    let res_term = eval_term b.term cb in
+    let res_blk = { insns = res_insns; term = res_term } in
+    { blocks = LblM.update (fun _ -> res_blk) l cfg.blocks;
+      preds = cfg.preds;
+      ret_ty = cfg.ret_ty;
+      args = cfg.args }
+  in
+  
   LblS.fold cp_block (Cfg.nodes cfg) cfg
