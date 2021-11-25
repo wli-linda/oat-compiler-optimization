@@ -34,6 +34,30 @@ type fact = SymPtr.t UidM.t
 
  *)
 let insn_flow ((u,i):uid * insn) (d:fact) : fact =
+  (* todo: I honestly still suspect this is missing things
+   * but idk... if it works so far I guess fine?? *)
+  let eval_op op d =
+    match op with
+    | Id id -> UidM.add id SymPtr.MayAlias d
+    | _ -> d
+  in
+  match i with
+  | Alloca _ -> UidM.add u SymPtr.Unique d
+  | Load (Ptr (Ptr _), _) | Call (Ptr _, _, _)
+  | Gep (Ptr _, _, _)->
+    let d' = UidM.remove u d in
+    UidM.add u SymPtr.MayAlias d
+
+  | Bitcast (Ptr _, op, _) ->
+    let d' = UidM.add u SymPtr.MayAlias d in
+    eval_op op d'
+
+  | Store (Ptr _, op, _) ->
+    eval_op op d
+
+  | _ -> d
+  
+  (*
   (* todo: uhh this whole function feels v badly written *)
   match i with
   | Alloca _ -> UidM.add u SymPtr.Unique d
@@ -48,15 +72,15 @@ let insn_flow ((u,i):uid * insn) (d:fact) : fact =
   | Load (Ptr (Ptr _), _) | Call (Ptr _, _, _)
   | Gep (Ptr _, _, _) ->
     UidM.add u SymPtr.MayAlias d
-(*
-  | Store (_, _, op) ->
+  
+  | Store (Ptr _, op, _) ->
     let d' = UidM.add u SymPtr.MayAlias d in
     begin match op with
       | Id u' -> UidM.add u' SymPtr.MayAlias d'
       | _ -> d'
-    end *)
+    end 
 
-  | _ -> (* todo: UidM.add u SymPtr.UndefAlias *) d
+  | _ -> (* todo: UidM.add u SymPtr.UndefAlias *) d *)
 
 
 (* The flow function across terminators is trivial: they never change alias info *)
