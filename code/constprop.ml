@@ -37,38 +37,56 @@ type fact = SymConst.t UidM.t
    - Uid of all other instructions are NonConst-out
  *)
 let insn_flow (u,i:uid * insn) (d:fact) : fact =
-  let d' = UidM.remove u d in
-  let eval_id id i =
-    match UidM.find_opt id d with
-    | Some SymConst.NonConst -> UidM.add u SymConst.NonConst d'
-    | Some SymConst.UndefConst -> UidM.add u SymConst.UndefConst d'
-    | Some SymConst.Const i' -> UidM.add u (SymConst.Const (Int64.add i i')) d'
-    | None -> d
+  let eval_binop binop i1 i2 =
+    match binop with
+    | Add -> Int64.add i1 i2
+    | Sub -> Int64.sub i1 i2
+    | Mul -> Int64.mul i1 i2
+    | Shl -> Int64.shift_left i1 (Int64.to_int i2)
+    | Lshr -> Int64.shift_right_logical i1 (Int64.to_int i2)
+    | Ashr -> Int64.shift_right i1 (Int64.to_int i2)
+    | And -> Int64.logand i1 i2
+    | Or -> Int64.logor i1 i2
+    | Xor -> Int64.logxor i1 i2
+  in
+  let eval_cnd cnd i1 i2 =
+    let b = match cnd with
+      | Eq -> i1 = i2 | Ne -> i1 != i2
+      | Slt -> i1 < i2 | Sle -> i1 <= i2
+      | Sgt -> i1 > i2 | Sge -> i1 >= i2
+    in if b then 1L else 0L
+  in
+  let eval_op op d =
+    match op with
+    | Const i -> SymConst.Const i
+    | Id id -> begin match UidM.find_opt id d with
+        | Some SymConst.Const i' -> SymConst.Const i'
+        | Some SymConst.NonConst ->  SymConst.NonConst
+        | Some SymConst.UndefConst -> SymConst.UndefConst
+        (* todo: not sure if this is the case *)
+        | None -> SymConst.UndefConst
+      end
+    | _ -> failwith "constprop eval_op not sure how to handle op"
+  in
+  let eval_ops op1 op2 res_fun =
+    match eval_op op1 d, eval_op op2 d with
+    | Const i1, Const i2 ->
+      UidM.add u (SymConst.Const (res_fun i1 i2)) d
+    | NonConst, NonConst | NonConst, _ | _, NonConst ->
+      UidM.add u SymConst.NonConst d
+    | UndefConst, UndefConst | UndefConst, _ | _, UndefConst ->
+      (* todo: normalize not doing anything later rip *)
+      (* UidM.add u SymConst.UndefConst *) d
   in
   match i with
-  | Binop (_, _, op1, op2) | Icmp (_, _, op1, op2) ->
-    begin match op1, op2 with
-      (* todo: need to evaluate result with two constants 
-       * (or operands that eventually evaluate to consts) *)
-      | Const _, Const i2 -> UidM.add u (SymConst.Const i2) d'
-      | Id id1, Id id2 ->
-        begin match UidM.find_opt id1 d with
-          | Some SymConst.NonConst -> UidM.add u SymConst.NonConst d'
-          | Some SymConst.UndefConst -> UidM.add u SymConst.UndefConst d'
-          | _ -> begin match UidM.find_opt id2 d with
-              | Some SymConst.NonConst -> UidM.add u SymConst.NonConst d'
-              | Some SymConst.UndefConst -> UidM.add u SymConst.UndefConst d'
-              | _ -> d
-            end
-        end
-      | Const i, Id id -> eval_id id i
-      | Id id, Const i -> eval_id id i
-      | _ -> d
-    end
+  | Binop (binop, _, op1, op2) -> 
+    eval_ops op1 op2 (eval_binop binop)
+  | Icmp (cnd, _, op1, op2) ->
+    eval_ops op1 op2 (eval_cnd cnd)
   | Store _ | Call (Void, _, _) ->
     (* todo: normalize not doing anything later rip *)
     (* UidM.add u SymConst.UndefConst *) d
-  | _ -> UidM.add u SymConst.NonConst d'
+  | _ -> UidM.add u SymConst.NonConst d
 
 (* The flow function across terminators is trivial: they never change const info *)
 let terminator_flow (t:terminator) (d:fact) : fact = d
@@ -100,7 +118,7 @@ module Fact =
             | Some f2' ->
               if SymConst.compare f1' f2' == 0
               then f1
-              (* todo: should change *)
+              (* todo: should change, probably *)
               else Some (SymConst.NonConst)
             | None -> f1
           end
