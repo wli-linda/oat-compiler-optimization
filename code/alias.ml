@@ -56,32 +56,7 @@ let insn_flow ((u,i):uid * insn) (d:fact) : fact =
     eval_op op d
 
   | _ -> d
-  
-  (*
-  (* todo: uhh this whole function feels v badly written *)
-  match i with
-  | Alloca _ -> UidM.add u SymPtr.Unique d
-
-  | Bitcast (Ptr _, op, _) ->
-    let d' = UidM.add u SymPtr.MayAlias d in
-    begin match op with
-      | Id u' -> UidM.add u' SymPtr.MayAlias d'
-      | _ -> d'
-    end
-      
-  | Load (Ptr (Ptr _), _) | Call (Ptr _, _, _)
-  | Gep (Ptr _, _, _) ->
-    UidM.add u SymPtr.MayAlias d
-  
-  | Store (Ptr _, op, _) ->
-    let d' = UidM.add u SymPtr.MayAlias d in
-    begin match op with
-      | Id u' -> UidM.add u' SymPtr.MayAlias d'
-      | _ -> d'
-    end 
-
-  | _ -> (* todo: UidM.add u SymPtr.UndefAlias *) d *)
-
+    
 
 (* The flow function across terminators is trivial: they never change alias info *)
 let terminator_flow t (d:fact) : fact = d

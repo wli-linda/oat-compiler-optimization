@@ -26,9 +26,12 @@ let dce_block (lb:uid -> Liveness.Fact.t)
               (b:Ll.block) : Ll.block =
   let insns' = List.filter (fun (uid, insn) -> begin match insn with
       | Call _ -> true
-      | Store (_, _, op) -> let uid' = (match op with Id id -> id) in
-        (* todo: dunno if correct... fairly lost *)
-        UidS.mem uid' (lb uid) || UidM.find_opt uid' (ab uid) = Some Alias.SymPtr.MayAlias
+      | Store (_, _, op) -> begin match op with
+          | Id uid' ->
+            UidS.mem uid' (lb uid) ||
+            UidM.find_opt uid' (ab uid) = Some Alias.SymPtr.MayAlias
+          | _ -> true
+        end
       | _ -> UidS.mem uid (lb uid)
     end
     ) b.insns in

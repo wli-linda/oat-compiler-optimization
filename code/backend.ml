@@ -745,9 +745,9 @@ let greedy_layout (f:Ll.fdecl) (live:liveness) : layout =
 module UidMap = Datastructures.UidM
 
 type graph = {
-  interference : UidSet.t UidMap.t;
-  precolored   : Alloc.loc UidMap.t;
-  preference   : LocSet.t UidMap.t;
+  interference : UidSet.t UidMap.t; (* for each uid, store liveness info? *)
+  precolored   : Alloc.loc UidMap.t; (* location of precolored nodes *)
+  preference   : LocSet.t UidMap.t; (* used locations/colors at any given uid? *)
 }
 
 let rax_uid = Parsing.gensym "rax"
@@ -781,7 +781,56 @@ let print_g {interference; precolored; preference} =
 
 
 let better_layout (f:Ll.fdecl) (live:liveness) : layout =
-  failwith "Backend.better_layout not implemented"
+  let n_arg = ref 0 in
+  let n_spill = ref 0 in
+  let spill () = (incr n_spill; Alloc.LStk (- !n_spill)) in
+
+  (* The available palette of registers.  Excludes Rax and Rcx *)
+  let pal = LocSet.(caller_save 
+                    |> remove (Alloc.LReg Rax)
+                    |> remove (Alloc.LReg Rcx)                       
+                   )
+  in
+  let get_avail_pal uid_pref = LocSet.diff pal uid_pref in
+  
+  let blk, blks = f.f_cfg in
+  let get_uids_interf blk uids_init interf_init =
+    List.fold_left (fun (uids, interf) (uid, insn) ->
+        UidSet.add uid uids, UidMap.add uid (live.live_in uid) interf
+      ) (uids_init, interf_init) blk.insns
+  in
+  let init_uids', init_interf' = get_uids_interf blk UidSet.empty UidMap.empty in
+  let init_uids, init_interf = List.fold_left (fun (uids, interf) (_, blk) ->
+      get_uids_interf blk uids interf) (init_uids', init_interf') blks
+  in
+  let init_g = { interference = init_interf;
+                 precolored = UidMap.empty;
+                 preference = UidMap.empty } in
+  
+  let simplify_graph interf uids k : UidSet.t UidMap.t * UidSet.t =
+    let uids_in_g = UidSet.elements uids in
+    let node = try (List.find (fun id ->
+        try UidSet.cardinal (UidMap.find id interf) < k
+        with Not_found -> false
+      ) uids_in_g)
+      with Not_found -> UidSet.choose uids in
+
+    
+    interf, uids  
+  in
+
+  let lo = fold_fdecl
+      (fun lo (x, _) -> failwith "not impl")  (* f_param *)
+      (fun lo l -> (l, Alloc.LLbl (Platform.mangle l)) :: lo) (* f_lbl *)
+      (fun lo (x, i) ->
+         if insn_assigns i
+         then failwith "not impl"
+         else (x, Alloc.LVoid) :: lo) (* f_insn *)
+      (fun lo _ -> lo) (* f_term *)
+      [] f in
+  { uid_loc = (fun x -> List.assoc x lo);
+    spill_bytes = 8 * !n_spill }
+  ; failwith "Backend.better_layout not implemented"
 
 
 (* register allocation options ---------------------------------------------- *)

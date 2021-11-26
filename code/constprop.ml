@@ -63,7 +63,7 @@ let insn_flow (u,i:uid * insn) (d:fact) : fact =
         (* todo: not sure if this is the case, or why it makes sense, hmm *)
         | None -> SymConst.UndefConst
       end
-    | _ -> failwith "constprop eval_op not sure how to handle op"
+    | _ -> SymConst.UndefConst (* failwith "constprop eval_op not sure how to handle op" *)
   in
   let eval_ops op1 op2 res_fun =
     match eval_op op1 d, eval_op op2 d with
