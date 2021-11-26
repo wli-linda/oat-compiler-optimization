@@ -799,11 +799,6 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
   let init_precolor = List.fold_left (fun m (uid, loc) ->
       UidMap.add uid loc m
     ) UidMap.empty param_locs in
-  (* can't fold maps liddat oops: 
-  UidMap.fold (fun uid loc m ->
-      UidMap.add uid loc m
-    ) UidMap.empty param_locs
-  in *)
   
   (* The available palette of registers.  Excludes Rax and Rcx *)
   let pal = LocSet.(caller_save 
@@ -821,10 +816,30 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
         else uids, interf
       ) (uids_init, interf_init) blk.insns
   in
-  let init_uids', init_interf' = get_uids_interf blk UidSet.empty UidMap.empty in
-  let init_uids, init_interf = List.fold_left (fun (uids, interf) (_, blk) ->
-      get_uids_interf blk uids interf) (init_uids', init_interf') blks
+  let init_uids', init_interf'' = get_uids_interf blk UidSet.empty UidMap.empty in
+  let init_uids, init_interf' = List.fold_left (fun (uids, interf) (_, blk) ->
+      get_uids_interf blk uids interf) (init_uids', init_interf'') blks
   in
+
+  let rec find_init_interf interf init_uids =
+    match init_uids with
+    | [] -> interf
+    | uid :: tl ->
+      let uid_edges = UidMap.find uid interf in
+      let rec update_connected_nodes edges uids =
+        match uids with
+        | [] -> edges
+        | uid' :: tl' ->
+          if UidSet.mem uid (UidMap.find uid' interf)
+          then UidSet.add uid' edges
+          else edges
+      in
+      let updated_edges = update_connected_nodes uid_edges tl in
+      let updated_interf = UidMap.update (fun _ ->
+          updated_edges) uid interf in
+      find_init_interf updated_interf tl
+  in
+  let init_interf = find_init_interf init_interf' (UidSet.elements init_uids) in
   let init_g = { interference = init_interf;
                  precolored = init_precolor;
                  preference = UidMap.empty } in
@@ -840,17 +855,19 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
                UidMap.find_opt id g.precolored = None)
           with Not_found -> false
         ) uids_in_g)
-        with _ -> UidSet.choose uids in
+        with Not_found -> UidSet.choose uids in
 
       let edges = UidSet.elements (UidMap.find node interf) in
       let rec remove_from_edges edges interf =
         match edges with
         | [] -> interf
-        | elem :: tl ->
-          let elem_set = UidMap.find elem interf in
-          let new_elem_set = UidSet.remove node elem_set in
-          let new_interf = UidMap.update (fun _ -> new_elem_set) elem interf in
-          remove_from_edges tl new_interf
+        | elem :: tl -> begin match UidMap.find_opt elem interf with
+            | Some elem_set ->
+              let new_elem_set = UidSet.remove node elem_set in
+              let new_interf = UidMap.update (fun _ -> new_elem_set) elem interf in
+              remove_from_edges tl new_interf
+            | None -> remove_from_edges tl interf
+          end
       in
       let simplified_interf = UidMap.remove node (remove_from_edges edges interf) in
       let simplified_g = { interference = simplified_interf;
@@ -867,21 +884,23 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
     | [] -> g
     | uid :: remaining ->
       let uid_pref = try (UidMap.find uid g.preference)
-        with _ -> LocSet.empty in
+        with Not_found -> LocSet.empty in
       let avail_colors = get_avail_pal uid_pref in
       let color = try (LocSet.choose avail_colors)
-        with _ -> failwith "no registers left, oops" in
+        with Not_found -> failwith "no registers left, oops" in
 
       let updated_colored = UidMap.add uid color g.precolored in
       let edges = UidSet.elements (UidMap.find uid init_interf) in
       let rec update_pref edges pref =
         match edges with
         | [] -> pref
-        | elem :: tl ->
-          let elem_set = UidMap.find elem pref in
-          let new_elem_set = LocSet.add color elem_set in
-          let new_pref = UidMap.update (fun _ -> new_elem_set) elem pref in
-          update_pref tl new_pref
+        | elem :: tl -> begin match UidMap.find_opt elem pref with
+            | Some elem_set ->
+              let new_elem_set = LocSet.add color elem_set in
+              let new_pref = UidMap.update (fun _ -> new_elem_set) elem pref in
+              update_pref tl new_pref
+            | None -> update_pref tl pref
+          end
       in
       let updated_pref = update_pref edges g.preference in
       let updated_g = { interference = g.interference;
@@ -908,8 +927,8 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
       (fun lo _ -> lo) (* f_term *)
       param_locs f in 
   { uid_loc = (fun x -> List.assoc x lo);
-    spill_bytes = 8 * !n_spill }
-  ; failwith "Backend.better_layout not implemented"
+    spill_bytes = 8 * !n_spill } (*
+  ; failwith "Backend.better_layout not implemented" *)
 
 
 (* register allocation options ---------------------------------------------- *)
