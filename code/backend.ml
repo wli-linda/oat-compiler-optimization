@@ -796,9 +796,9 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
       (uid, alloc_arg ()) :: ih
     ) [] f.f_param
   in
-  let init_precolor = List.fold_left (fun m (uid, loc) ->
-      UidMap.add uid loc m
-    ) UidMap.empty param_locs in
+  let init_precolor, param_set  = List.fold_left (fun (m, s) (uid, loc) ->
+      UidMap.add uid loc m, LocSet.add loc s
+    ) (UidMap.empty, LocSet.empty) param_locs in
   
   (* The available palette of registers.  Excludes Rax and Rcx *)
   let pal = LocSet.(caller_save 
@@ -821,28 +821,51 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
       get_uids_interf blk uids interf) (init_uids', init_interf'') blks
   in
 
-  let rec find_init_interf interf init_uids =
+  let init_pref' = List.fold_left (fun m uid ->
+      UidMap.add uid param_set m
+    ) UidMap.empty (UidSet.elements init_uids) in
+  
+  let rec find_init_interf_pref interf pref init_uids =
     match init_uids with
-    | [] -> interf
+    | [] -> interf, pref
     | uid :: tl ->
-      let uid_edges = UidMap.find uid interf in
-      let rec update_connected_nodes edges uids =
+      let uid_edges = try UidMap.find uid interf
+        with Not_found -> UidSet.empty in
+      let rec update_connected_nodes edges pref uids =
         match uids with
-        | [] -> edges
+        | [] -> edges, pref
         | uid' :: tl' ->
-          if UidSet.mem uid (UidMap.find uid' interf)
-          then UidSet.add uid' edges
-          else edges
+          if List.mem uid' f.f_param = false &&
+             UidSet.mem uid (UidMap.find uid' interf)
+          then begin
+            if List.mem uid f.f_param
+            then begin
+              let param_loc = UidMap.find uid init_precolor in
+              let uid_pref = try (UidMap.find uid' pref)
+              with Not_found -> LocSet.empty in
+              let new_uid_pref = LocSet.add param_loc uid_pref in
+              let new_pref = try (UidMap.update (fun _ ->
+                  new_uid_pref) uid' pref)
+                with Not_found -> UidMap.add uid' new_uid_pref pref in
+              edges, new_pref
+            end
+            else UidSet.add uid' edges, pref
+          end
+          else edges, pref
       in
-      let updated_edges = update_connected_nodes uid_edges tl in
-      let updated_interf = UidMap.update (fun _ ->
-          updated_edges) uid interf in
-      find_init_interf updated_interf tl
+      let updated_edges, updated_pref =
+        update_connected_nodes uid_edges pref tl in
+      let updated_interf =
+        if List.mem uid f.f_param
+        then interf
+        else UidMap.update (fun _ -> updated_edges) uid interf in
+      find_init_interf_pref updated_interf updated_pref tl
   in
-  let init_interf = find_init_interf init_interf' (UidSet.elements init_uids) in
+  let init_interf, init_pref = find_init_interf_pref init_interf' init_pref'
+      (f.f_param @ UidSet.elements init_uids) in
   let init_g = { interference = init_interf;
                  precolored = init_precolor;
-                 preference = UidMap.empty } in
+                 preference = init_pref } in
   
   let rec simplify_graph g uids removed k : graph * UidSet.t * uid list =
     let interf = g.interference in
