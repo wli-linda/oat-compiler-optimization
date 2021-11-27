@@ -784,11 +784,26 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
   let n_arg = ref 0 in
   let n_spill = ref 0 in
   let spill () = (incr n_spill; Alloc.LStk (- !n_spill)) in
-
+(*
+  let arg_reg' : int -> X86.reg option = function
+    | 0 -> Some Rdi
+    | 1 -> Some Rsi
+    | 2 -> Some Rdx
+    | 3 -> Some Rcx
+    | 4 -> Some R08
+    | 5 -> Some R09
+    | 6 -> Some R10
+    | n -> None in
+  
+  let arg_loc' (n:int) : Alloc.loc = 
+    match arg_reg' n with
+    | Some r -> Alloc.LReg r
+    | None -> Alloc.LStk (n-4) in *)
+  
   (* allocate locs for params following greedy *)
   let alloc_arg () =
     let res = match arg_loc !n_arg with
-      | Alloc.LReg Rcx -> spill ()
+      | Alloc.LReg Rcx -> Alloc.LReg R11 (* spill () *)
       | x -> x
     in incr n_arg; res
   in
@@ -803,9 +818,14 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
     ) (UidMap.empty, LocSet.empty) param_locs in
   
   (* The available palette of registers.  Excludes Rax and Rcx *)
-  let pal = LocSet.(caller_save 
-                    |> remove (Alloc.LReg Rax)
-                    |> remove (Alloc.LReg Rcx) )
+  let pal = (*LocSet.union*) (LocSet.(caller_save 
+                                  |> remove (Alloc.LReg Rax)
+                                  |> remove (Alloc.LReg Rcx) ))
+      (*
+      (LocSet.add (Alloc.LReg R12) LocSet.empty) *)
+      (*
+      (LocSet.(callee_save 
+               |> remove (Alloc.LReg R15) )) *)
   in
   let get_avail_pal uid_pref = LocSet.diff pal uid_pref in
 
@@ -824,10 +844,6 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
   let init_uids, init_interf' = List.fold_left (fun (uids, interf) (_, blk) ->
       get_uids_interf blk uids interf) (init_uids', init_interf'') blks
   in
-  (*
-  let init_pref' = List.fold_left (fun m uid ->
-      UidMap.add uid param_set m
-    ) UidMap.empty (UidSet.elements init_uids) in *)
   
   let rec find_init_interf_pref interf pref uids =
     match uids with
@@ -880,22 +896,39 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
   let init_g = { interference = init_interf;
                  precolored = init_precolor;
                  preference = init_pref } in
-  
+  (*
+  let find_max_interf_node interf uids =
+    let uid_interf_ls = List.map (fun uid ->
+        (uid, UidSet.cardinal @@ UidMap.find uid interf)
+      ) (UidSet.elements uids) in
+    let rec find_max ls (uid, max) =
+      match ls with
+      | [] -> uid, max
+      | (uid', max') :: tl ->
+        if max' > max
+        then find_max tl (uid', max')
+        else find_max tl (uid, max)
+    in
+    let max_uid, max_interf = find_max uid_interf_ls ("", 0) in
+    max_uid
+  in 
+  *)
   let rec simplify_graph g uids removed k : graph * UidSet.t * uid list =
     let interf = g.interference in
     (* check that there are non-precolored nodes left to remove *)
-    if UidSet.is_empty (UidSet.filter (fun id ->
-        UidMap.find_opt id g.precolored = None) uids)
-                    then g, uids, removed (* base case; no more nodes to remove *)
+    let not_colored = UidSet.filter (fun id ->
+        UidMap.find_opt id g.precolored = None) uids in
+    if UidSet.is_empty not_colored
+    then g, uids, removed (* base case; no more nodes to remove *)
     else begin
       (* choose a node < k degrees, or randomly pick one *)
-      let uids_in_g = UidSet.elements uids in
+      let uids_in_g = List.rev @@ UidSet.elements not_colored in
       let node = try (List.find (fun id ->
-          try (UidSet.cardinal (UidMap.find id interf) < k &&
-               UidMap.find_opt id g.precolored = None)
+          try (UidSet.cardinal (UidMap.find id interf) < k)
           with Not_found -> false
         ) uids_in_g)
-        with Not_found -> UidSet.choose uids in
+        with Not_found -> (*find_max_interf_node interf not_colored*)
+          UidSet.choose not_colored in
 
       (* get the edges of that node and remove it from its neighbors'
        * list of edges in the interf graph *)
@@ -958,17 +991,6 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
               new_elem_set) elem pref)
             with Not_found -> UidMap.add elem new_elem_set pref in
           update_pref tl new_pref
-         (*
-          begin match UidMap.find_opt elem pref with
-            | Some elem_set ->
-              let new_elem_set = LocSet.add color elem_set in
-              let new_pref = UidMap.update (fun _ -> new_elem_set) elem pref in
-              update_pref tl new_pref
-            | None ->
-              let new_elem_set = LocSet.add color LocSet.empty in
-              let new_pref = UidMap.add elem new_elem_set pref in
-              update_pref tl new_pref
-          end *)
       in
       let updated_pref = update_pref edges g.preference in
       let updated_g = { interference = g.interference;
