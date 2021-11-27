@@ -45,7 +45,7 @@ let insn_flow ((u,i):uid * insn) (d:fact) : fact =
   | Alloca _ -> UidM.add u SymPtr.Unique d
   | Load (Ptr (Ptr _), _) | Call (Ptr _, _, _)
   | Gep (Ptr _, _, _)->
-    let d' = UidM.remove u d in
+    (*let d' = UidM.remove u d in*)
     UidM.add u SymPtr.MayAlias d
 
   | Bitcast (Ptr _, op, _) ->
