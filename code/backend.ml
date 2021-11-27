@@ -784,21 +784,6 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
   let n_arg = ref 0 in
   let n_spill = ref 0 in
   let spill () = (incr n_spill; Alloc.LStk (- !n_spill)) in
-(*
-  let arg_reg' : int -> X86.reg option = function
-    | 0 -> Some Rdi
-    | 1 -> Some Rsi
-    | 2 -> Some Rdx
-    | 3 -> Some Rcx
-    | 4 -> Some R08
-    | 5 -> Some R09
-    | 6 -> Some R10
-    | n -> None in
-  
-  let arg_loc' (n:int) : Alloc.loc = 
-    match arg_reg' n with
-    | Some r -> Alloc.LReg r
-    | None -> Alloc.LStk (n-4) in *)
   
   (* allocate locs for params following greedy *)
   let alloc_arg () =
@@ -818,31 +803,53 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
     ) (UidMap.empty, LocSet.empty) param_locs in
   
   (* The available palette of registers.  Excludes Rax and Rcx *)
-  let pal = (*LocSet.union*) (LocSet.(caller_save 
-                                  |> remove (Alloc.LReg Rax)
-                                  |> remove (Alloc.LReg Rcx) ))
-      (*
-      (LocSet.add (Alloc.LReg R12) LocSet.empty) *)
-      (*
-      (LocSet.(callee_save 
-               |> remove (Alloc.LReg R15) )) *)
+  let pal = LocSet.(caller_save 
+                    |> remove (Alloc.LReg Rax)
+                    |> remove (Alloc.LReg Rcx))
   in
   let get_avail_pal uid_pref = LocSet.diff pal uid_pref in
 
   (* get liveness of all blks & uids for initial interf *)
   let blk, blks = f.f_cfg in
-  let get_uids_interf blk uids_init interf_init =
-    List.fold_left (fun (uids, interf) (uid, insn) ->
+  let get_uids_interf blk uids_init interf_init prior_init =
+    let rec get_priors n prior ls interf =
+      match ls with
+      | [] -> prior
+      | (_, op) :: tl -> begin match op with
+          | Id id -> if UidMap.find_opt id interf != None
+            then (let loc = arg_loc n in
+                  let new_prior = UidMap.add id loc prior in
+                  get_priors (n + 1) new_prior tl interf)
+            else get_priors (n + 1) prior tl interf
+          | _ -> get_priors (n + 1) prior tl interf
+        end
+    in
+    List.fold_left (fun (uids, interf, prior) (uid, insn) ->
         if insn_assigns insn
         (* todo: live_in or live_out?? lmao gg *)
-        then UidSet.add uid uids, UidMap.add uid (live.live_in uid) interf
+        then begin
+          match insn with
+          | Call (_, _, ls) ->
+            UidSet.add uid uids, UidMap.add uid (live.live_in uid) interf,
+            get_priors 0 prior ls interf
+          | _ ->
+            UidSet.add uid uids, UidMap.add uid (live.live_in uid) interf, prior
+        end
         (* todo: add void uids to precolored as well? *)
-        else uids, interf
-      ) (uids_init, interf_init) blk.insns
+        else begin
+          match insn with
+          | Call (_, _, ls) ->
+            uids, interf,
+            get_priors 0 prior ls interf
+          | _ ->
+            uids, interf, prior
+        end
+      ) (uids_init, interf_init, prior_init) blk.insns
   in
-  let init_uids', init_interf'' = get_uids_interf blk UidSet.empty UidMap.empty in
-  let init_uids, init_interf' = List.fold_left (fun (uids, interf) (_, blk) ->
-      get_uids_interf blk uids interf) (init_uids', init_interf'') blks
+  let init_uids', init_interf'', init_prior' =
+    get_uids_interf blk UidSet.empty UidMap.empty UidMap.empty in
+  let init_uids, init_interf', init_prior = List.fold_left (fun (uids, interf, prior) (_, blk) ->
+      get_uids_interf blk uids interf prior) (init_uids', init_interf'', init_prior') blks
   in
   
   let rec find_init_interf_pref interf pref uids =
@@ -969,7 +976,11 @@ let better_layout (f:Ll.fdecl) (live:liveness) : layout =
       let uid_pref = try (UidMap.find uid g.preference)
         with Not_found -> LocSet.empty in
       let avail_colors = get_avail_pal uid_pref in
-      let color = try (LocSet.choose avail_colors)
+      let color = try (let prior = UidMap.find uid init_prior in
+                       if LocSet.mem prior uid_pref
+                       then LocSet.choose avail_colors
+                       else prior)
+        with Not_found -> try (LocSet.choose avail_colors)
         with Not_found -> spill () in
 
       (* add this node and its loc info to precolored *)
@@ -1118,9 +1129,5 @@ let compile_prog {tdecls; gdecls; fdecls} : X86.prog =
   let f = fun (name, fdecl) ->
     prog_of_x86stream @@ compile_fdecl tdecls name fdecl
   in
-  let prog =
   (List.map g gdecls)
-  @ List.(flatten @@ map f fdecls) in (*
-  let hist, _ = Registers.histogram_of_prog prog in
-  Printf.printf "%s\n\n\n" (Registers.string_of_histogram hist) 
-  ; *) prog
+  @ List.(flatten @@ map f fdecls) 
